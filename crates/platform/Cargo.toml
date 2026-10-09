@@ -18,3 +18,6 @@ ashpd = { version = "0.13", default-features = false, features = ["global_shortc
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 pipewire = { version = "0.10", features = ["v0_3_64"] }
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+
+[target."cfg(windows)".dependencies]
+cpal = "0.18"

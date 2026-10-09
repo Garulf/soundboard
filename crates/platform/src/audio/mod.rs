@@ -1,3 +1,6 @@
+pub mod cable;
+#[cfg(windows)]
+mod cpal_backend;
 pub mod devices;
 #[cfg(target_os = "linux")]
 mod pipewire;
@@ -31,7 +34,12 @@ fn start_platform(pump: Arc<BusPump>, report: Reporter) -> Result<Box<dyn AudioC
     pipewire::start(pump, report).map(|b| Box::new(b) as Box<dyn AudioControl>)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn start_platform(pump: Arc<BusPump>, report: Reporter) -> Result<Box<dyn AudioControl>, String> {
+    cpal_backend::start(pump, report).map(|b| Box::new(b) as Box<dyn AudioControl>)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn start_platform(_pump: Arc<BusPump>, _report: Reporter) -> Result<Box<dyn AudioControl>, String> {
     Err("no audio backend for this platform".into())
 }
