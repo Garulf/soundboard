@@ -104,6 +104,7 @@ pub struct Controller {
     revision: u64,
     hotkey_revision: u64,
     last_change: Option<Instant>,
+    save_failing: bool,
     snapshot: SharedSnapshot,
     on_change: ChangeCallback,
 }
@@ -132,6 +133,7 @@ impl Controller {
             revision: 0,
             hotkey_revision: 1,
             last_change: None,
+            save_failing: false,
             snapshot: SharedSnapshot::default(),
             on_change,
         };
@@ -310,6 +312,9 @@ impl Controller {
         let tab_changed = sound.tab != updated.tab;
         let target_tab = updated.tab;
         *sound = Sound {
+            id: sound.id,
+            file: std::mem::take(&mut sound.file),
+            lufs: sound.lufs,
             tab: sound.tab,
             ..updated
         };
@@ -442,13 +447,36 @@ impl Controller {
         }
     }
 
+    /// The library as it should be persisted: sounds whose import has not
+    /// finished have no stored file yet and are left out.
+    fn persistable_library(&self) -> Library {
+        let mut library = self.library.clone();
+        for id in &self.pending_imports {
+            library.delete_sound(*id);
+        }
+        library
+    }
+
+    /// Writes pending changes. On failure the change stays pending so the
+    /// next tick retries, and the user is told once until a save succeeds.
     pub fn flush(&mut self) {
-        if self.last_change.take().is_some()
-            && let Err(e) = self.store.save(&self.library)
-        {
-            tracing::error!("saving library failed: {e}");
-            self.notices.push(format!("Saving the library failed: {e}"));
-            self.publish();
+        if self.last_change.is_none() {
+            return;
+        }
+        match self.store.save(&self.persistable_library()) {
+            Ok(()) => {
+                self.last_change = None;
+                self.save_failing = false;
+            }
+            Err(e) => {
+                tracing::error!("saving library failed: {e}");
+                self.last_change = Some(Instant::now());
+                if !self.save_failing {
+                    self.save_failing = true;
+                    self.notices.push(format!("Saving the library failed: {e}"));
+                    self.publish();
+                }
+            }
         }
     }
 }

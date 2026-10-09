@@ -356,3 +356,63 @@ fn trim_window_converts_milliseconds_to_frames() {
     assert_eq!(trim_frames(0, None, 96_000), (0, 96_000));
     assert_eq!(trim_frames(0, Some(10_000), 96_000), (0, 96_000));
 }
+
+#[test]
+fn sounds_still_importing_are_not_saved() {
+    let mut rig = Rig::new();
+    let path = rig.wav("slow.wav");
+    rig.import(path);
+
+    rig.controller
+        .tick(Instant::now() + SAVE_DEBOUNCE + Duration::from_millis(50));
+
+    let saved = LibraryStore::new(rig.controller.store().root())
+        .load()
+        .unwrap()
+        .library;
+    assert!(
+        saved.sounds.iter().all(|s| !s.file.is_empty()),
+        "{:?}",
+        saved.sounds
+    );
+}
+
+#[test]
+fn saving_from_the_editor_keeps_file_and_loudness() {
+    let mut rig = Rig::new();
+    let path = rig.wav("a.wav");
+    rig.import(path);
+    rig.finish_jobs(1);
+    let stored = rig.only_sound();
+    let draft = Sound {
+        name: "Renamed".into(),
+        file: String::new(),
+        lufs: None,
+        ..stored.clone()
+    };
+
+    rig.controller.handle(Command::UpdateSound(Box::new(draft)));
+
+    let sound = rig.only_sound();
+    assert_eq!(sound.name, "Renamed");
+    assert_eq!(sound.file, stored.file);
+    assert_eq!(sound.lufs, stored.lufs);
+}
+
+#[test]
+fn failed_saves_are_retried_and_reported_once() {
+    let mut rig = Rig::new();
+    let blocker = rig.controller.store().root().join("library.toml");
+    std::fs::create_dir(&blocker).unwrap();
+    rig.controller.handle(Command::AddTab("Kept".into()));
+    let later = || Instant::now() + SAVE_DEBOUNCE + Duration::from_millis(50);
+
+    rig.controller.tick(later());
+    rig.controller.tick(later());
+    assert_eq!(rig.controller.snapshot().notices.len(), 1);
+
+    std::fs::remove_dir(&blocker).unwrap();
+    rig.controller.tick(later());
+    let text = std::fs::read_to_string(&blocker).unwrap();
+    assert!(text.contains("Kept"));
+}
