@@ -1,4 +1,6 @@
-use super::{Binding, HotkeyProvider, HotkeyStatus, PressHandler};
+use super::{
+    Binding, HotkeyProvider, HotkeyStatus, PressHandler, bind_failure_status, split_duplicates,
+};
 use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut, Shortcut};
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -119,21 +121,29 @@ async fn run(mut rx: UnboundedReceiver<Vec<Binding>>, on_press: PressHandler, st
                     let old: ashpd::desktop::Session<GlobalShortcuts> = old;
                     let _ = old.close().await;
                 }
-                if bindings.is_empty() {
-                    update(&state, |s| s.triggers.clear());
+                let (unique, duplicates) = split_duplicates(bindings);
+                if unique.is_empty() {
+                    update(&state, |s| {
+                        s.triggers.clear();
+                        s.status = Some(HotkeyStatus::Active { backend: BACKEND, failed: duplicates });
+                    });
                     continue;
                 }
-                match bind(&portal, &bindings).await {
+                match bind(&portal, &unique).await {
                     Ok((new_session, triggers)) => {
                         session = Some(new_session);
                         update(&state, |s| {
                             s.triggers = triggers;
-                            s.status = Some(HotkeyStatus::Active { backend: BACKEND, failed: Vec::new() });
+                            s.status = Some(HotkeyStatus::Active { backend: BACKEND, failed: duplicates });
                         });
                     }
                     Err(e) => {
                         tracing::warn!("binding portal shortcuts failed: {e}");
-                        update(&state, |s| s.status = Some(unavailable(e)));
+                        let status = bind_failure_status(BACKEND, &unique, duplicates, &e.to_string());
+                        update(&state, |s| {
+                            s.triggers.clear();
+                            s.status = Some(status);
+                        });
                     }
                 }
             }

@@ -1,5 +1,5 @@
 use super::accelerator::Accelerator;
-use super::{Binding, HotkeyProvider, HotkeyStatus, PressHandler};
+use super::{Binding, HotkeyProvider, HotkeyStatus, PressHandler, split_duplicates};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -92,16 +92,10 @@ impl<R: Registrar> HotkeyProvider for GlobalProvider<R> {
         for (_, accelerator) in self.bound.drain(..) {
             self.registrar.unregister(&accelerator);
         }
-        self.failed.clear();
+        let (unique, duplicates) = split_duplicates(bindings);
+        self.failed = duplicates;
         let mut routes = HashMap::new();
-        for binding in bindings {
-            if self.bound.iter().any(|(_, a)| *a == binding.accelerator) {
-                self.failed.push((
-                    binding.id,
-                    format!("{} is already used by another action", binding.accelerator),
-                ));
-                continue;
-            }
+        for binding in unique {
             match self.registrar.register(&binding.accelerator) {
                 Ok(id) => {
                     routes.insert(id, binding.id.clone());

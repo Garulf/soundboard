@@ -27,6 +27,40 @@ pub enum HotkeyStatus {
 
 pub type PressHandler = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Keeps the first binding for each accelerator; later ones are returned as
+/// failures so the rest can still be bound.
+pub fn split_duplicates(bindings: Vec<Binding>) -> (Vec<Binding>, Vec<(String, String)>) {
+    let mut unique: Vec<Binding> = Vec::new();
+    let mut failed = Vec::new();
+    for binding in bindings {
+        if unique.iter().any(|b| b.accelerator == binding.accelerator) {
+            failed.push((
+                binding.id,
+                format!("{} is already used by another action", binding.accelerator),
+            ));
+        } else {
+            unique.push(binding);
+        }
+    }
+    (unique, failed)
+}
+
+/// Status after the backend refused a whole set of bindings: hotkeys stay
+/// available, and every binding is listed with the reason.
+pub fn bind_failure_status(
+    backend: &'static str,
+    attempted: &[Binding],
+    mut failed: Vec<(String, String)>,
+    error: &str,
+) -> HotkeyStatus {
+    failed.extend(
+        attempted
+            .iter()
+            .map(|b| (b.id.clone(), format!("not registered: {error}"))),
+    );
+    HotkeyStatus::Active { backend, failed }
+}
+
 pub trait HotkeyProvider {
     /// Replaces every registered binding with `bindings`.
     fn bind(&mut self, bindings: Vec<Binding>);
@@ -71,3 +105,7 @@ pub fn create_hotkeys(on_press: PressHandler) -> Box<dyn HotkeyProvider> {
     }
     global_provider(on_press)
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
