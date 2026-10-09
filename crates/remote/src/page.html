@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16181d">
+<title>Soundboard</title>
+<style>
+  :root { color-scheme: dark; --bg: #16181d; --panel: #20232b; --text: #e8eaf0; --muted: #8b90a0; --accent: #e5484d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.3 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { position: sticky; top: 0; display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--panel); z-index: 1; }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; }
+  #stop { background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600; font-size: 15px; }
+  nav { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px; }
+  nav button { flex: none; background: var(--panel); color: var(--muted); border: 0; border-radius: 999px; padding: 6px 14px; font-size: 14px; }
+  nav button.active { color: var(--text); background: #343846; }
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; padding: 4px 12px 24px; }
+  main button { min-height: 72px; border: 0; border-radius: 10px; color: white; font-size: 15px; font-weight: 600; padding: 8px; word-break: break-word; text-shadow: 0 1px 2px #0008; }
+  main button.playing { outline: 3px solid white; outline-offset: -3px; }
+  #status { color: var(--muted); padding: 24px 12px; text-align: center; }
+</style>
+</head>
+<body>
+<header><h1>Soundboard</h1><button id="stop">Stop all</button></header>
+<nav id="tabs"></nav>
+<main id="grid"></main>
+<p id="status">Connecting...</p>
+<script>
+const token = new URLSearchParams(location.search).get("token") || "";
+const headers = { Authorization: "Bearer " + token };
+let state = null;
+let activeTab = null;
+
+async function call(method, path) {
+  const response = await fetch(path, { method, headers });
+  if (response.status === 401) throw new Error("This link is missing a valid token. Scan the QR code in the app again.");
+  if (!response.ok) throw new Error("Request failed: " + response.status);
+  return response.status === 204 ? null : response.json();
+}
+
+function render() {
+  const tabs = document.getElementById("tabs");
+  const grid = document.getElementById("grid");
+  tabs.replaceChildren();
+  grid.replaceChildren();
+  if (!state.tabs.some(t => t.id === activeTab)) activeTab = state.tabs[0]?.id;
+  for (const tab of state.tabs) {
+    const b = document.createElement("button");
+    b.textContent = tab.name;
+    b.className = tab.id === activeTab ? "active" : "";
+    b.onclick = () => { activeTab = tab.id; render(); };
+    tabs.append(b);
+  }
+  const byId = new Map(state.sounds.map(s => [s.id, s]));
+  const tab = state.tabs.find(t => t.id === activeTab);
+  for (const id of tab ? tab.sounds : []) {
+    const sound = byId.get(id);
+    if (!sound) continue;
+    const b = document.createElement("button");
+    b.textContent = sound.name;
+    b.style.background = sound.color;
+    if (sound.playing) b.className = "playing";
+    b.onclick = () => call("POST", "/api/sounds/" + id + "/play").then(refresh).catch(show);
+    grid.append(b);
+  }
+  document.getElementById("status").textContent = state.sounds.length ? "" : "No sounds yet. Add some in the app.";
+}
+
+function show(error) {
+  document.getElementById("status").textContent = error.message;
+}
+
+async function refresh() {
+  try {
+    state = await call("GET", "/api/state");
+    render();
+  } catch (error) {
+    show(error);
+  }
+}
+
+document.getElementById("stop").onclick = () => call("POST", "/api/stop").catch(show);
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
