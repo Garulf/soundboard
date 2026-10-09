@@ -10,7 +10,7 @@ publish = false
 axum = "0.8"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-soundboard-core = { version = "0.0.0", path = "../core" }
+soundboard-core.workspace = true
 tokio = { version = "1", features = ["rt", "net", "sync", "macros"] }
 tracing.workspace = true
 

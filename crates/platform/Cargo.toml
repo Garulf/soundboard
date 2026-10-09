@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 global-hotkey = "0.8"
 rtrb = "0.4"
-soundboard-core = { version = "0.0.0", path = "../core" }
+soundboard-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
