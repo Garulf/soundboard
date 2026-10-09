@@ -179,6 +179,12 @@ pub struct Library {
     pub sounds: Vec<Sound>,
 }
 
+impl Default for Library {
+    fn default() -> Self {
+        Self::new_default()
+    }
+}
+
 impl Library {
     pub fn new_default() -> Self {
         Self {
