@@ -22,6 +22,6 @@ pub use ids::{SoundId, TabId};
 pub use mic::{MicInput, mic_ring};
 pub use mixer::{Bus, Meters, mixer, sound_key};
 pub use model::*;
-pub use pump::{BusPump, RateAdapter};
+pub use pump::{BusPump, OutputAdapter, RateAdapter};
 pub use snapshot::{ClipStatus, SharedSnapshot, Snapshot};
 pub use store::{LibraryStore, LoadOutcome, StoreError};

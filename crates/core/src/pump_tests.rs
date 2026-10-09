@@ -136,3 +136,37 @@ fn a_slower_consumer_does_not_accumulate_latency() {
         pump.queued_frames(Bus::Mic)
     );
 }
+
+fn run_two_clocks(
+    mut pull_slow: impl FnMut(&BusPump, &mut [f32]),
+    mut pull_fast: impl FnMut(&BusPump, &mut [f32]),
+) -> usize {
+    let (_handle, pump) = playing_pump(48_000);
+    let mut slow = vec![0.0; 2 * 480];
+    let mut fast = vec![0.0; 2 * 481];
+    for _ in 0..3000 {
+        pull_slow(&pump, &mut slow);
+        pull_fast(&pump, &mut fast);
+    }
+    pump.dropped_frames()
+}
+
+#[test]
+fn uncorrected_clock_drift_drops_audio() {
+    let dropped = run_two_clocks(
+        |pump, out| pump.pull(Bus::Monitor, out),
+        |pump, out| pump.pull(Bus::Mic, out),
+    );
+    assert!(dropped > 0);
+}
+
+#[test]
+fn drift_corrected_outputs_never_drop_audio() {
+    let mut monitor = OutputAdapter::new(Bus::Monitor, crate::clip::ENGINE_RATE);
+    let mut mic = OutputAdapter::new(Bus::Mic, crate::clip::ENGINE_RATE);
+    let dropped = run_two_clocks(
+        |pump, out| monitor.pull(pump, out),
+        |pump, out| mic.pull(pump, out),
+    );
+    assert_eq!(dropped, 0);
+}

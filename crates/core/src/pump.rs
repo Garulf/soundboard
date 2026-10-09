@@ -1,6 +1,8 @@
 use crate::clip::{CHANNELS, ENGINE_RATE};
+use crate::mic::DriftController;
 pub use crate::mixer::Bus;
 use crate::mixer::Mixer;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 pub const PUMP_BLOCK_FRAMES: usize = 256;
@@ -68,6 +70,7 @@ struct PumpInner {
 /// renders a block for both buses; the other bus is queued for its callback.
 pub struct BusPump {
     inner: Mutex<PumpInner>,
+    dropped: AtomicUsize,
 }
 
 impl BusPump {
@@ -82,6 +85,7 @@ impl BusPump {
                     vec![0.0; PUMP_BLOCK_FRAMES * CHANNELS],
                 ],
             }),
+            dropped: AtomicUsize::new(0),
         })
     }
 
@@ -99,8 +103,15 @@ impl BusPump {
         queue.pop_into(out);
         let limit = want + 2 * PUMP_BLOCK_FRAMES * CHANNELS;
         if queue.len > limit {
-            queue.drop_oldest(queue.len - want);
+            let excess = queue.len - want;
+            queue.drop_oldest(excess);
+            self.dropped.fetch_add(excess / CHANNELS, Ordering::Relaxed);
         }
+    }
+
+    /// Frames discarded so far because a consumer fell too far behind.
+    pub fn dropped_frames(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     pub fn queued_frames(&self, bus: Bus) -> usize {
@@ -113,6 +124,8 @@ impl BusPump {
 /// linear interpolation. Allocation-free after construction.
 pub struct RateAdapter {
     step: f64,
+    correction: f64,
+    always_interpolate: bool,
     frac: f64,
     prev: [f32; 2],
     cur: [f32; 2],
@@ -124,6 +137,8 @@ impl RateAdapter {
     pub fn new(device_rate: u32) -> Self {
         Self {
             step: ENGINE_RATE as f64 / device_rate.max(1) as f64,
+            correction: 1.0,
+            always_interpolate: false,
             frac: 1.0,
             prev: [0.0; 2],
             cur: [0.0; 2],
@@ -132,8 +147,20 @@ impl RateAdapter {
         }
     }
 
+    /// An adapter whose rate can be nudged with [`Self::set_correction`].
+    pub fn with_drift_correction(device_rate: u32) -> Self {
+        Self {
+            always_interpolate: true,
+            ..Self::new(device_rate)
+        }
+    }
+
+    pub fn set_correction(&mut self, ratio: f64) {
+        self.correction = ratio;
+    }
+
     pub fn is_passthrough(&self) -> bool {
-        self.step == 1.0
+        self.step == 1.0 && !self.always_interpolate
     }
 
     fn next_frame(&mut self, src: &mut impl FnMut(&mut [f32])) -> [f32; 2] {
@@ -161,8 +188,36 @@ impl RateAdapter {
             for (ch, sample) in frame.iter_mut().enumerate() {
                 *sample = self.prev[ch] + (self.cur[ch] - self.prev[ch]) * t;
             }
-            self.frac += self.step;
+            self.frac += self.step * self.correction;
         }
+    }
+}
+
+const OUTPUT_TARGET_FRAMES: usize = 2 * PUMP_BLOCK_FRAMES;
+
+/// One device output fed from the pump. Device clocks drift apart, so the
+/// read rate is nudged from how much audio is queued for this bus, keeping
+/// the queue near a small target instead of overflowing.
+pub struct OutputAdapter {
+    bus: Bus,
+    adapter: RateAdapter,
+    drift: DriftController,
+}
+
+impl OutputAdapter {
+    pub fn new(bus: Bus, device_rate: u32) -> Self {
+        Self {
+            bus,
+            adapter: RateAdapter::with_drift_correction(device_rate),
+            drift: DriftController::new(OUTPUT_TARGET_FRAMES),
+        }
+    }
+
+    pub fn pull(&mut self, pump: &BusPump, out: &mut [f32]) {
+        let ratio = self.drift.update(pump.queued_frames(self.bus));
+        self.adapter.set_correction(ratio);
+        let bus = self.bus;
+        self.adapter.pull(out, |buf| pump.pull(bus, buf));
     }
 }
 
