@@ -1,0 +1,13 @@
+[package]
+name = "soundboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A soundboard for Linux and Windows that plays clips into a virtual microphone"
+publish = false
+
+[dependencies]
+soundboard-core.workspace = true
+soundboard-platform.workspace = true
+soundboard-remote.workspace = true
