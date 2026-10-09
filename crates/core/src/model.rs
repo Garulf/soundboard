@@ -5,6 +5,26 @@ pub const LIBRARY_VERSION: u32 = 1;
 pub const DEFAULT_REMOTE_PORT: u16 = 7373;
 pub const DEFAULT_TARGET_LUFS: f64 = -18.0;
 
+pub const SOUND_PALETTE: [[u8; 3]; 10] = [
+    [70, 90, 140],
+    [52, 120, 110],
+    [140, 70, 110],
+    [150, 95, 45],
+    [95, 80, 150],
+    [60, 115, 60],
+    [155, 60, 60],
+    [45, 105, 145],
+    [120, 110, 50],
+    [105, 75, 60],
+];
+
+fn palette_color(name: &str) -> [u8; 3] {
+    let hash = name
+        .bytes()
+        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+    SOUND_PALETTE[hash as usize % SOUND_PALETTE.len()]
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Route {
@@ -75,8 +95,10 @@ impl Default for Sound {
 
 impl Sound {
     pub fn new(name: impl Into<String>, file: impl Into<String>, tab: TabId) -> Self {
+        let name = name.into();
         Self {
-            name: name.into(),
+            color: palette_color(&name),
+            name,
             file: file.into(),
             tab,
             ..Self::default()

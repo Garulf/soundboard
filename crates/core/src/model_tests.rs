@@ -113,3 +113,17 @@ fn move_tab_reorders() {
     assert_eq!(library.tabs[0].id, second);
     assert_eq!(library.tabs[1].id, first);
 }
+
+#[test]
+fn new_sounds_get_a_palette_color_stable_per_name() {
+    let tab = TabId::new();
+    let a = Sound::new("Airhorn", "a.wav", tab);
+    let again = Sound::new("Airhorn", "b.wav", tab);
+    assert_eq!(a.color, again.color);
+    assert!(SOUND_PALETTE.contains(&a.color));
+    let colors: std::collections::HashSet<_> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        .iter()
+        .map(|n| Sound::new(*n, "x", tab).color)
+        .collect();
+    assert!(colors.len() > 2);
+}
