@@ -6,6 +6,7 @@ pub mod loudness;
 pub mod mic;
 pub mod mixer;
 pub mod model;
+pub mod pump;
 pub mod store;
 
 pub use ids::{SoundId, TabId};
