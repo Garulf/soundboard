@@ -61,3 +61,18 @@ fn converts_to_global_hotkey() {
     assert!(hk.mods.contains(global_hotkey::hotkey::Modifiers::CONTROL));
     assert!(hk.mods.contains(global_hotkey::hotkey::Modifiers::SHIFT));
 }
+
+#[test]
+fn egui_key_names_are_accepted() {
+    for name in [
+        "OpenBracket",
+        "CloseBracket",
+        "Backtick",
+        "Equals",
+        "Up",
+        "PageDown",
+        "0",
+    ] {
+        assert!(Key::from_name(name).is_some(), "{name}");
+    }
+}
