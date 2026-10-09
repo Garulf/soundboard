@@ -18,7 +18,8 @@
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name.value == 'soundboard' || @.name.value == 'soundboard-core' || @.name.value == 'soundboard-platform' || @.name.value == 'soundboard-remote')].version"
         }
-      ]
+      ],
+      "initial-version": "0.1.0"
     }
   }
 }
