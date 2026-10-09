@@ -1,6 +1,8 @@
 //! Library model, decoding, mixer and controller.
 
+pub mod clip;
 pub mod ids;
+pub mod loudness;
 pub mod model;
 pub mod store;
 
