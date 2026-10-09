@@ -8,6 +8,25 @@ description = "A soundboard for Linux and Windows that plays clips into a virtua
 publish = false
 
 [dependencies]
+anyhow.workspace = true
+directories = "6"
+eframe = "0.36"
+egui = "0.36"
+getrandom = { version = "0.3", default-features = false }
+qrcode = { version = "0.14", default-features = false }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 soundboard-core.workspace = true
 soundboard-platform.workspace = true
 soundboard-remote.workspace = true
+tracing.workspace = true
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["blocking", "tokio"] }
+
+[target."cfg(windows)".dependencies]
+tray-icon = "0.26"
+
+[dev-dependencies]
+tempfile = "3"
