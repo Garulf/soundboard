@@ -1,0 +1,8 @@
+# readwright configuration. All keys are optional; autodetected values are shown.
+project:
+  name: Soundboard
+  owner: Garulf
+  repo: soundboard
+  license: MIT
+  tagline: A soundboard for Linux and Windows that plays clips into your voice chat, with hotkeys and a phone remote.
+badges: [ci, github-release, license]

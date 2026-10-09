@@ -1,0 +1,101 @@
+{% extends "base.md.j2" %}
+
+{% block install %}
+## Features
+
+- Sounds go to a virtual microphone, your headphones, or both, set per sound.
+- Your real microphone is mixed in, so people still hear you while clips play.
+- Global hotkeys, including on Wayland (KDE Plasma 6, GNOME 48+, Hyprland, COSMIC) through the desktop's shortcut portal.
+- Tabs, search, drag to reorder, and colors.
+- Per sound: volume, trim with a waveform editor, loop, and what happens on a second press (overlap, restart, toggle, or stop everything else).
+- Loudness normalization (EBU R128) and a limiter on the voice output, so stacked clips don't clip.
+- A phone remote: turn it on in Settings and scan the QR code.
+- Runs from the system tray.
+
+## Installation
+
+Download the archive for your platform from the [latest release]({{ project.url }}/releases/latest).
+
+### Linux
+
+Needs PipeWire (the default audio server on current Fedora, Ubuntu, Arch and most other distros).
+
+```sh
+tar xzf soundboard-*-x86_64-linux.tar.gz
+cd soundboard-*-x86_64-linux
+./soundboard
+```
+
+To add it to your app menu, copy `soundboard` to `~/.local/bin/`, `soundboard.desktop` to
+`~/.local/share/applications/` and `soundboard.png` to `~/.local/share/icons/hicolor/256x256/apps/`.
+
+### Windows
+
+Windows has no built-in way for an app to create a microphone, so install a virtual audio cable first:
+[VB-Cable](https://vb-audio.com/Cable/) (free) or
+[Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver). Then unzip
+`soundboard-*-x86_64-windows.zip` and run `soundboard.exe`. Without a cable, sounds still play
+through your speakers.
+{% endblock %}
+
+{% block usage %}
+## Usage
+
+1. Drag audio files or folders onto the window, or click **Add sounds**. WAV, MP3, FLAC, OGG, AAC/M4A and AIFF are supported. Files are copied into the soundboard's own folder, so moving the originals later is fine.
+2. In Discord, your game or your call app, pick the soundboard as your microphone:
+   - Linux: **Soundboard Mic**
+   - Windows: **CABLE Output** (VB-Cable) or the Virtual-Audio-Driver microphone
+3. Click a sound to play it. Right-click or double-click it to edit it.
+
+Don't set Soundboard Mic as your system default input. The soundboard records your default
+microphone to mix it in, so it would end up recording itself.
+
+### Hotkeys
+
+Set a hotkey in a sound's editor, or set Stop all and the mic toggle in Settings. On Wayland the
+desktop decides the final key. It may ask you to confirm, and you can change the keys in your
+desktop's shortcut settings.
+
+If your desktop has no shortcut portal (for example GNOME 46 and older), turn on the phone remote
+and bind a desktop shortcut to a command like this, with `SOUNDBOARD_TOKEN` set to the token from the link:
+
+```sh
+curl -X POST -H "Authorization: Bearer $SOUNDBOARD_TOKEN" http://localhost:7373/api/stop
+```
+
+### Phone remote
+
+Turn on **Phone remote** in Settings and scan the QR code with a phone on the same network. The
+link contains a secret token; click **New link** to cancel old ones. The same HTTP API works for
+scripts and Stream Deck style tools:
+
+| Request | Effect |
+|---|---|
+| `GET /api/state` | Tabs, sounds and what is playing |
+| `POST /api/sounds/{id}/play` | Play a sound |
+| `POST /api/sounds/{id}/stop` | Stop a sound |
+| `POST /api/stop` | Stop everything |
+
+Send the token as `Authorization: Bearer <token>` or as `?token=<token>`.
+
+### Where things are stored
+
+| | Linux | Windows |
+|---|---|---|
+| Library and sounds | `~/.config/soundboard/` | `%APPDATA%\soundboard\config\` |
+| Logs | `~/.local/share/soundboard/logs/` | `%APPDATA%\soundboard\data\logs\` |
+
+## Building from source
+
+You need a recent stable Rust toolchain. On Linux you also need the PipeWire development files and
+clang (`libpipewire-0.3-dev libclang-dev pkg-config` on Debian and Ubuntu).
+
+```sh
+cargo build --release
+./target/release/soundboard
+```
+
+The workspace is split into `soundboard-core` (library, decoding, mixer, controller),
+`soundboard-platform` (PipeWire and WASAPI backends, hotkeys), `soundboard-remote` (HTTP remote)
+and `soundboard` (the egui app). `cargo test --workspace` runs the tests.
+{% endblock %}

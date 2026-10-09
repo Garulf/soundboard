@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Soundboard
+Comment=Play sound clips into voice chat
+Exec=soundboard
+Icon=soundboard
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=soundboard;sounds;voice;discord;
+StartupWMClass=soundboard
