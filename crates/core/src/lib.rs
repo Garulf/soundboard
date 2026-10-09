@@ -3,6 +3,8 @@
 pub mod clip;
 pub mod ids;
 pub mod loudness;
+pub mod mic;
+pub mod mixer;
 pub mod model;
 pub mod store;
 
