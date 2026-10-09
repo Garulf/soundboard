@@ -2,6 +2,7 @@ use super::Reporter;
 use super::devices::{
     DeviceKind, VIRTUAL_MIC_DESCRIPTION, VIRTUAL_MIC_NODE, device_kind, device_label,
 };
+use super::retry::RETRY_DELAY;
 use pipewire as pw;
 use pw::properties::{PropertiesBox, properties};
 use pw::spa;
@@ -11,11 +12,13 @@ use soundboard_core::{
     AudioConfig, AudioControl, BackendStatus, Bus, BusPump, CHANNELS, Command, DeviceInfo,
     DeviceList, ENGINE_RATE, mic_ring,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 const BYTES_PER_SAMPLE: usize = std::mem::size_of::<f32>();
 const STRIDE: usize = CHANNELS * BYTES_PER_SAMPLE;
@@ -29,6 +32,7 @@ enum Msg {
 
 pub struct PipeWireAudio {
     tx: pw::channel::Sender<Msg>,
+    stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -40,6 +44,7 @@ impl AudioControl for PipeWireAudio {
 
 impl Drop for PipeWireAudio {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Msg::Terminate);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -47,26 +52,58 @@ impl Drop for PipeWireAudio {
     }
 }
 
+pub fn stream_status(state: &StreamState) -> Option<BackendStatus> {
+    match state {
+        StreamState::Paused | StreamState::Streaming => Some(BackendStatus::Ok),
+        StreamState::Error(e) => Some(BackendStatus::Error(e.clone())),
+        StreamState::Connecting | StreamState::Unconnected => None,
+    }
+}
+
+enum SessionEnd {
+    Terminated,
+    Lost(String),
+}
+
+/// Starts the PipeWire thread. If PipeWire is unavailable or the connection
+/// drops, the thread keeps retrying and re-applies the last configuration.
 pub fn start(pump: Arc<BusPump>, report: Reporter) -> Result<PipeWireAudio, String> {
     let (tx, rx) = pw::channel::channel();
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
     let thread = std::thread::Builder::new()
         .name("pipewire".into())
         .spawn(move || {
-            if let Err(e) = run(pump, report.clone(), rx, &ready_tx) {
-                tracing::error!("PipeWire backend stopped: {e}");
-                report(Command::BackendStatus(BackendStatus::Error(e.clone())));
-                let _ = ready_tx.send(Err(e));
+            pw::init();
+            let mut rx = rx;
+            let mut config = None;
+            while !thread_stop.load(Ordering::Relaxed) {
+                let (end, returned_rx, last_config) =
+                    run_session(&pump, &report, rx, config.clone());
+                rx = returned_rx;
+                config = last_config;
+                match end {
+                    SessionEnd::Terminated => break,
+                    SessionEnd::Lost(e) => {
+                        tracing::warn!("PipeWire unavailable, retrying: {e}");
+                        report(Command::BackendStatus(BackendStatus::Error(e)));
+                        wait_or_stop(&thread_stop, RETRY_DELAY);
+                    }
+                }
             }
         })
         .map_err(|e| e.to_string())?;
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(PipeWireAudio {
-            tx,
-            thread: Some(thread),
-        }),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err("the PipeWire thread exited unexpectedly".into()),
+    Ok(PipeWireAudio {
+        tx,
+        stop,
+        thread: Some(thread),
+    })
+}
+
+fn wait_or_stop(stop: &AtomicBool, delay: Duration) {
+    let deadline = Instant::now() + delay;
+    while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -118,16 +155,12 @@ fn output_stream(
     pump: Arc<BusPump>,
     bus: Bus,
     flags: StreamFlags,
-    report: Option<Reporter>,
+    on_state: impl Fn(StreamState) + 'static,
 ) -> Result<OutputStream, String> {
     let stream = StreamRc::new(core.clone(), name, props).map_err(|e| e.to_string())?;
     let listener = stream
         .add_local_listener_with_user_data(Vec::<f32>::with_capacity(SCRATCH_FRAMES * CHANNELS))
-        .state_changed(move |_, _, _, new| {
-            if let (Some(report), StreamState::Error(e)) = (&report, new) {
-                report(Command::BackendStatus(BackendStatus::Error(e)));
-            }
-        })
+        .state_changed(move |_, _, _, new| on_state(new))
         .process(move |stream, scratch| {
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
@@ -297,7 +330,14 @@ impl Graph {
                 self.pump.clone(),
                 Bus::Monitor,
                 StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-                None,
+                {
+                    let report = self.report.clone();
+                    move |state| {
+                        if let StreamState::Error(e) = state {
+                            report(Command::Notice(format!("The monitor output stopped: {e}")));
+                        }
+                    }
+                },
             ) {
                 Ok(stream) => self.monitor = Some(stream),
                 Err(e) => (self.report)(Command::Notice(format!(
@@ -322,29 +362,42 @@ impl Graph {
     }
 }
 
-fn run(
-    pump: Arc<BusPump>,
-    report: Reporter,
-    rx: pw::channel::Receiver<Msg>,
-    ready: &std::sync::mpsc::Sender<Result<(), String>>,
-) -> Result<(), String> {
-    pw::init();
-    let connect_err = |e: pw::Error| format!("Could not connect to PipeWire: {e}");
-    let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(connect_err)?;
-    let context = pw::context::ContextRc::new(&mainloop, None).map_err(connect_err)?;
-    let core = context.connect_rc(None).map_err(connect_err)?;
-    let registry = core.get_registry_rc().map_err(connect_err)?;
+type SessionResult = (SessionEnd, pw::channel::Receiver<Msg>, Option<AudioConfig>);
 
+fn run_session(
+    pump: &Arc<BusPump>,
+    report: &Reporter,
+    rx: pw::channel::Receiver<Msg>,
+    config: Option<AudioConfig>,
+) -> SessionResult {
+    let lost = |e: String| SessionEnd::Lost(format!("Could not connect to PipeWire: {e}"));
+    let mainloop = match pw::main_loop::MainLoopRc::new(None) {
+        Ok(mainloop) => mainloop,
+        Err(e) => return (lost(e.to_string()), rx, config),
+    };
+    let context = match pw::context::ContextRc::new(&mainloop, None) {
+        Ok(context) => context,
+        Err(e) => return (lost(e.to_string()), rx, config),
+    };
+    let core = match context.connect_rc(None) {
+        Ok(core) => core,
+        Err(e) => return (lost(e.to_string()), rx, config),
+    };
+    let registry = match core.get_registry_rc() {
+        Ok(registry) => registry,
+        Err(e) => return (lost(e.to_string()), rx, config),
+    };
+
+    let lost_reason: Rc<RefCell<Option<String>>> = Rc::default();
     let _core_listener = core
         .add_listener_local()
         .error({
-            let report = report.clone();
+            let lost_reason = lost_reason.clone();
             let mainloop = mainloop.clone();
             move |id, _seq, _res, message| {
                 if id == pw::core::PW_ID_CORE {
-                    report(Command::BackendStatus(BackendStatus::Error(format!(
-                        "Lost the PipeWire connection: {message}"
-                    ))));
+                    *lost_reason.borrow_mut() =
+                        Some(format!("Lost the PipeWire connection: {message}"));
                     mainloop.quit();
                 }
             }
@@ -405,41 +458,70 @@ fn run(
         *pw::keys::PRIORITY_SESSION => "0",
         *pw::keys::PRIORITY_DRIVER => "0",
     };
-    let _mic = output_stream(
+    let mic = output_stream(
         &core,
         "soundboard-mic",
         mic_props,
         pump.clone(),
         Bus::Mic,
         StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-        Some(report.clone()),
-    )?;
+        {
+            let report = report.clone();
+            move |state| {
+                if let Some(status) = stream_status(&state) {
+                    report(Command::BackendStatus(status));
+                }
+            }
+        },
+    );
+    let _mic = match mic {
+        Ok(mic) => mic,
+        Err(e) => return (lost(e), rx, config),
+    };
 
     let graph = Rc::new(RefCell::new(Graph {
         core: core.clone(),
-        pump,
+        pump: pump.clone(),
         report: report.clone(),
         config: None,
         monitor: None,
         capture: None,
     }));
-    let _receiver = rx.attach(mainloop.loop_(), {
+    if let Some(cfg) = config {
+        graph.borrow_mut().apply(cfg);
+    }
+    let terminated = Rc::new(Cell::new(false));
+    let receiver = rx.attach(mainloop.loop_(), {
         let graph = graph.clone();
         let mainloop = mainloop.clone();
+        let terminated = terminated.clone();
         move |msg| match msg {
             Msg::Configure(cfg) => graph.borrow_mut().apply(cfg),
-            Msg::Terminate => mainloop.quit(),
+            Msg::Terminate => {
+                terminated.set(true);
+                mainloop.quit();
+            }
         }
     });
 
-    let _ = ready.send(Ok(()));
-    report(Command::BackendStatus(BackendStatus::Ok));
     mainloop.run();
 
+    let rx = receiver.deattach();
     let mut graph = graph.borrow_mut();
+    let config = graph.config.clone();
     graph.monitor = None;
     if graph.capture.take().is_some() {
         report(Command::MicClosed);
     }
-    Ok(())
+    let end = if terminated.get() {
+        SessionEnd::Terminated
+    } else {
+        let reason = lost_reason.borrow_mut().take();
+        SessionEnd::Lost(reason.unwrap_or_else(|| "PipeWire stopped".into()))
+    };
+    (end, rx, config)
 }
+
+#[cfg(test)]
+#[path = "pipewire_tests.rs"]
+mod tests;

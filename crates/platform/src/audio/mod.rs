@@ -4,6 +4,7 @@ mod cpal_backend;
 pub mod devices;
 #[cfg(target_os = "linux")]
 mod pipewire;
+pub mod retry;
 
 use soundboard_core::{AudioConfig, AudioControl, BackendStatus, BusPump, Command};
 use std::sync::Arc;

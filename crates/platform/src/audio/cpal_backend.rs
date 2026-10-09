@@ -1,10 +1,11 @@
 use super::Reporter;
 use super::cable::{find_cable, push_stereo, write_frames};
+use super::retry::should_rebuild;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use soundboard_core::{
     AudioConfig, AudioControl, BackendStatus, Bus, BusPump, CHANNELS, Command, DeviceInfo,
-    DeviceList, RateAdapter, mic_ring,
+    DeviceList, OutputAdapter, mic_ring,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +14,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(500);
-const RETRY: Duration = Duration::from_secs(2);
 const DEVICE_REFRESH: Duration = Duration::from_secs(5);
 const SCRATCH_FRAMES: usize = 16_384;
 
@@ -106,7 +106,7 @@ fn output_stream(
 ) -> Result<Stream, String> {
     let config = f32_config(device, true)?;
     let channels = config.channels as usize;
-    let mut adapter = RateAdapter::new(config.sample_rate);
+    let mut output = OutputAdapter::new(bus, config.sample_rate);
     let mut stereo = Vec::with_capacity(SCRATCH_FRAMES * CHANNELS);
     let stream = device
         .build_output_stream(
@@ -114,7 +114,7 @@ fn output_stream(
             move |data: &mut [f32], _| {
                 let frames = data.len() / channels.max(1);
                 stereo.resize(frames * CHANNELS, 0.0);
-                adapter.pull(&mut stereo, |buf| pump.pull(bus, buf));
+                output.pull(&pump, &mut stereo);
                 write_frames(data, channels, &stereo);
             },
             move |e| {
@@ -173,6 +173,7 @@ struct Backend {
     devices: DeviceList,
     last_refresh: Instant,
     last_attempt: Instant,
+    incomplete: bool,
 }
 
 impl Backend {
@@ -187,6 +188,7 @@ impl Backend {
             devices: DeviceList::default(),
             last_refresh: Instant::now(),
             last_attempt: Instant::now(),
+            incomplete: false,
         }
     }
 
@@ -201,11 +203,15 @@ impl Backend {
                 Ok(Msg::Terminate) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if self.failed.load(Ordering::Relaxed) && self.last_attempt.elapsed() >= RETRY {
+            let devices_changed =
+                self.last_refresh.elapsed() >= DEVICE_REFRESH && self.refresh_devices();
+            if should_rebuild(
+                self.failed.load(Ordering::Relaxed),
+                self.incomplete,
+                self.last_attempt.elapsed(),
+                devices_changed,
+            ) {
                 self.rebuild();
-            }
-            if self.last_refresh.elapsed() >= DEVICE_REFRESH {
-                self.refresh_devices();
             }
         }
         self.close();
@@ -225,16 +231,19 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    fn refresh_devices(&mut self) {
+    /// Re-enumerates devices and reports whether the list changed.
+    fn refresh_devices(&mut self) -> bool {
         self.last_refresh = Instant::now();
         let devices = DeviceList {
             outputs: self.outputs().iter().filter_map(device_info).collect(),
             inputs: self.inputs().iter().filter_map(device_info).collect(),
         };
-        if devices != self.devices {
-            self.devices = devices.clone();
-            (self.report)(Command::Devices(devices));
+        if devices == self.devices {
+            return false;
         }
+        self.devices = devices.clone();
+        (self.report)(Command::Devices(devices));
+        true
     }
 
     fn close(&mut self) {
@@ -310,6 +319,7 @@ impl Backend {
             }
         }
 
+        self.incomplete = !problems.is_empty() || !cable_found;
         let status = if !problems.is_empty() {
             BackendStatus::Error(problems.join("; "))
         } else if !cable_found {
