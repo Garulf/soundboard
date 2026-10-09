@@ -98,3 +98,28 @@ fn importing_missing_file_errors() {
     let err = store.import_file(&dir.path().join("nope.wav")).unwrap_err();
     assert!(matches!(err, StoreError::Io { .. }), "{err:?}");
 }
+
+#[test]
+fn concurrent_imports_of_identical_content_all_succeed() {
+    let (dir, store) = store();
+    for round in 0..10 {
+        let sources: Vec<_> = (0..8)
+            .map(|i| {
+                let path = dir.path().join(format!("r{round}-{i}.wav"));
+                let mut bytes = vec![round as u8; 4 << 20];
+                bytes[0] = 1;
+                fs::write(&path, bytes).unwrap();
+                path
+            })
+            .collect();
+        let results: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = sources
+                .iter()
+                .map(|src| scope.spawn(|| store.import_file(src)))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let names: Vec<_> = results.into_iter().map(|r| r.unwrap()).collect();
+        assert!(names.windows(2).all(|w| w[0] == w[1]));
+    }
+}

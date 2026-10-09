@@ -2,6 +2,7 @@ use crate::model::Library;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const LIBRARY_FILE: &str = "library.toml";
@@ -20,6 +21,15 @@ fn io_err(path: &Path) -> impl FnOnce(io::Error) -> StoreError + '_ {
         path: path.to_path_buf(),
         source,
     }
+}
+
+fn unique_suffix() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 pub struct LoadOutcome {
@@ -119,9 +129,14 @@ impl LibraryStore {
         fs::create_dir_all(&dir).map_err(io_err(&dir))?;
         let dest = dir.join(&name);
         if !dest.exists() {
-            let tmp = dir.join(format!("{name}.tmp"));
+            let tmp = dir.join(format!("{name}.{}.tmp", unique_suffix()));
             fs::write(&tmp, &bytes).map_err(io_err(&tmp))?;
-            fs::rename(&tmp, &dest).map_err(io_err(&dest))?;
+            if let Err(e) = fs::rename(&tmp, &dest) {
+                let _ = fs::remove_file(&tmp);
+                if !dest.exists() {
+                    return Err(io_err(&dest)(e));
+                }
+            }
         }
         Ok(name)
     }
