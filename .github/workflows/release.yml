@@ -51,7 +51,7 @@ jobs:
       - name: Read version
         id: version
         shell: bash
-        run: echo "version=$(cat version.txt 2>/dev/null || grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(jq -r '."."' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
       - run: cargo build --release --locked -p soundboard
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -92,7 +92,7 @@ jobs:
           merge-multiple: true
       - name: Replace the pre-release
         run: |
-          version="$(cat version.txt)"
+          version="$(jq -r '."."' .release-please-manifest.json)"
           gh release list --json tagName,isPrerelease -q '.[] | select(.isPrerelease) | .tagName' |
             while read -r tag; do gh release delete "$tag" --cleanup-tag --yes; done
           gh release create "v${version}-pre" dist/* \
