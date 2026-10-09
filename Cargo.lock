@@ -4251,7 +4251,7 @@ dependencies = [
 
 [[package]]
 name = "soundboard"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -4273,7 +4273,7 @@ dependencies = [
 
 [[package]]
 name = "soundboard-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "ebur128",
@@ -4291,7 +4291,7 @@ dependencies = [
 
 [[package]]
 name = "soundboard-platform"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ashpd",
  "cpal",
@@ -4307,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "soundboard-remote"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
