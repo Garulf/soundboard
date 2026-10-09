@@ -17,19 +17,31 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
-      prs_created: ${{ steps.release.outputs.prs_created }}
-      pr_branch: ${{ steps.release.outputs.pr && fromJSON(steps.release.outputs.pr).headBranchName }}
-      pr_number: ${{ steps.release.outputs.pr && fromJSON(steps.release.outputs.pr).number }}
+      version: ${{ steps.release.outputs.release_created == 'true' && steps.release.outputs.version || steps.pending.outputs.version }}
+      pr_number: ${{ steps.pending.outputs.number }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      - name: Find the pending release PR
+        id: pending
+        if: steps.release.outputs.release_created != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          pr="$(gh pr list --state open --label 'autorelease: pending' --json number,headRefName -q '.[0] // empty')"
+          if [ -z "$pr" ]; then exit 0; fi
+          branch="$(jq -r .headRefName <<<"$pr")"
+          echo "number=$(jq -r .number <<<"$pr")" >> "$GITHUB_OUTPUT"
+          version="$(gh api "repos/$GH_REPO/contents/.release-please-manifest.json?ref=$branch" -q .content | base64 -d | jq -r '."."')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true' || needs.release-please.outputs.pr_branch != ''
+    if: needs.release-please.outputs.version != ''
     strategy:
       fail-fast: false
       matrix:
@@ -39,24 +51,22 @@ jobs:
           - os: windows-latest
             platform: windows
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.tag_name || needs.release-please.outputs.pr_branch }}
+          ref: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.tag_name || github.sha }}
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libclang-dev pkg-config libxkbcommon-dev libdbus-1-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Read version
-        id: version
-        shell: bash
-        run: echo "version=$(jq -r '."."' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
       - run: cargo build --release --locked -p soundboard
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          name="soundboard-${{ steps.version.outputs.version }}-x86_64-linux"
+          name="soundboard-${{ env.VERSION }}-x86_64-linux"
           mkdir -p "dist/$name"
           cp target/release/soundboard assets/soundboard.desktop assets/soundboard.png README.md LICENSE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
@@ -65,7 +75,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "soundboard-${{ steps.version.outputs.version }}-x86_64-windows"
+          $name = "soundboard-${{ env.VERSION }}-x86_64-windows"
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
           Copy-Item target/release/soundboard.exe, README.md, LICENSE "dist/$name/"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
@@ -77,29 +87,26 @@ jobs:
 
   prerelease:
     needs: [release-please, build]
-    if: needs.release-please.outputs.release_created != 'true' && needs.release-please.outputs.pr_branch != ''
+    if: needs.release-please.outputs.release_created != 'true'
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.release-please.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.release-please.outputs.pr_branch }}
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - name: Replace the pre-release
         run: |
-          version="$(jq -r '."."' .release-please-manifest.json)"
           gh release list --json tagName,isPrerelease -q '.[] | select(.isPrerelease) | .tagName' |
             while read -r tag; do gh release delete "$tag" --cleanup-tag --yes; done
-          gh release create "v${version}-pre" dist/* \
+          gh release create next dist/* \
             --prerelease \
-            --target "${{ needs.release-please.outputs.pr_branch }}" \
-            --title "v${version} (pre-release)" \
-            --notes "Build of release PR #${{ needs.release-please.outputs.pr_number }}, which becomes v${version} when merged. It is rebuilt whenever main changes."
+            --target "${{ github.sha }}" \
+            --title "v${VERSION} (pre-release)" \
+            --notes "Build of main at ${{ github.sha }}. Merging release PR #${{ needs.release-please.outputs.pr_number }} turns it into v${VERSION}. Rebuilt whenever main changes."
 
   release:
     needs: [release-please, build]
