@@ -7,3 +7,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+global-hotkey = "0.8"
+soundboard-core = { version = "0.0.0", path = "../core" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["global_shortcuts", "tokio"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
